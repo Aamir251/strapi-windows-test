@@ -7,53 +7,118 @@ on:
 
 jobs:
   deploy:
+    name: Deploy to Windows Server
     runs-on: self-hosted
 
     defaults:
       run:
         shell: powershell
 
+    env:
+      PROJECT_PATH: F:\my-strapi-project
+
     steps:
-      - name: Deploy
+      - name: Show Deployment Information
         run: |
-          $project = "F:\my-strapi-project"
-          $nssm = "C:\Users\Aamir\nssm-2.24\nssm-2.24\win64\nssm.exe"
+          Write-Host "=========================================="
+          Write-Host "Starting Deployment"
+          Write-Host "Time : $(Get-Date)"
+          Write-Host "Branch : master"
+          Write-Host "=========================================="
 
-          Write-Host "===== Starting Deployment ====="
+      - name: Go to Project
+        run: |
+          Push-Location $env:PROJECT_PATH
 
-          cd $project
+      - name: Fetch Latest Code
+        run: |
+          Push-Location $env:PROJECT_PATH
 
-          Write-Host "Fetching latest code..."
+          Write-Host "$(Get-Date -Format 'HH:mm:ss') Fetching latest code..."
           git fetch origin
 
-          Write-Host "Resetting to latest commit..."
+          Write-Host "Latest Commit:"
+          git rev-parse origin/master
+
+          Pop-Location
+
+      - name: Reset Repository
+        run: |
+          Push-Location $env:PROJECT_PATH
+
+          Write-Host "$(Get-Date -Format 'HH:mm:ss') Resetting repository..."
           git reset --hard origin/master
 
-          Write-Host "Cleaning untracked files..."
-          git clean -fd
+          # Uncomment once you're 100% sure the server never contains
+          # files that should be preserved.
+          # git clean -fd
 
-          Write-Host "Installing dependencies..."
+          Pop-Location
+
+      - name: Install Dependencies
+        run: |
+          Push-Location $env:PROJECT_PATH
+
+          Write-Host "$(Get-Date -Format 'HH:mm:ss') Installing dependencies..."
           npm install
 
-          Write-Host "Building Strapi..."
+          Pop-Location
+
+      - name: Build Strapi
+        run: |
+          Push-Location $env:PROJECT_PATH
+
+          Write-Host "$(Get-Date -Format 'HH:mm:ss') Building Strapi..."
           npm run build
 
-          Write-Host "Restarting Strapi..."
-          & $nssm restart StrapiCMS
+          Pop-Location
 
-          Write-Host "Waiting for Strapi..."
-          Start-Sleep -Seconds 10
+      - name: Restart Strapi Service
+        run: |
+          Write-Host "$(Get-Date -Format 'HH:mm:ss') Restarting Strapi..."
 
-          try {
-              $response = Invoke-WebRequest http://localhost:1337/admin -UseBasicParsing
+          schtasks /Run /TN "Restart Strapi"
 
-              if ($response.StatusCode -eq 200) {
-                  Write-Host "✅ Deployment Successful"
-              } else {
-                  throw "Health check failed."
+      - name: Wait For Strapi
+        run: |
+          Write-Host "Waiting for Strapi to start..."
+
+          $healthy = $false
+          $maxAttempts = 30
+
+          for ($i = 1; $i -le $maxAttempts; $i++) {
+
+              try {
+
+                  $response = Invoke-WebRequest `
+                      -Uri http://localhost:1337/admin `
+                      -UseBasicParsing `
+                      -TimeoutSec 5
+
+                  if ($response.StatusCode -eq 200) {
+                      Write-Host "✅ Strapi is online."
+                      $healthy = $true
+                      break
+                  }
+
               }
+              catch {
+
+                  Write-Host "Attempt $i/$maxAttempts..."
+                  Start-Sleep -Seconds 2
+
+              }
+
           }
-          catch {
-              Write-Error $_
-              exit 1
+
+          if (-not $healthy) {
+              throw "Deployment failed. Strapi never became healthy."
           }
+
+      - name: Deployment Complete
+        run: |
+          Write-Host ""
+          Write-Host "=========================================="
+          Write-Host "✅ Deployment Completed Successfully"
+          Write-Host "Completed At : $(Get-Date)"
+          Write-Host "=========================================="
